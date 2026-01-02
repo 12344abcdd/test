@@ -9,7 +9,6 @@ import org.spongepowered.asm.mixin.Overwrite;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 
-
 @Mixin(Frustum.class)
 public class FrustumMixin {
     @Shadow private double camX;
@@ -20,17 +19,14 @@ public class FrustumMixin {
     @Unique
     private final Vector4f[] frustumData = new Vector4f[6];
 
-
     @Overwrite
     private void calculateFrustum(Matrix4f projection, Matrix4f modelView) {
-
         Matrix4f matrix4f = new Matrix4f(modelView).mul(projection);
         matrix4f.transpose();
 
         this.viewVector = new Vector4f(0.0F, 0.0F, 1.0F, 0.0F);
         matrix4f.transform(this.viewVector);
 
- 
         getPlane(matrix4f, -1, 0, 0, 0);
         getPlane(matrix4f, 1, 0, 0, 1);
         getPlane(matrix4f, 0, -1, 0, 2);
@@ -47,7 +43,6 @@ public class FrustumMixin {
         frustumData[idx] = v;
     }
 
-
     @Overwrite
     public void prepare(double x, double y, double z) {
         this.camX = x;
@@ -55,12 +50,8 @@ public class FrustumMixin {
         this.camZ = z;
     }
 
-
     @Overwrite
     public boolean isVisible(AABB aabb) {
-     for (Vector4f plane : frustumData) {
-        if (plane == null) {
-            return true;
         return this.cubeInFrustum(aabb.minX, aabb.minY, aabb.minZ, aabb.maxX, aabb.maxY, aabb.maxZ);
     }
 
@@ -82,7 +73,6 @@ public class FrustumMixin {
             for (float x : xs) {
                 for (float y : ys) {
                     for (float z : zs) {
-          
                         if (plane.dot(new Vector4f(x, y, z, 1.0F)) > 0.0F) {
                             inside = true;
                             break;
@@ -93,7 +83,6 @@ public class FrustumMixin {
                 if (inside) break;
             }
             if (!inside) {
-     
                 return false;
             }
         }
