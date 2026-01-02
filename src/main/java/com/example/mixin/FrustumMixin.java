@@ -9,9 +9,7 @@ import org.spongepowered.asm.mixin.Overwrite;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 
-/**
- * 完全自定义Frustum，可用于替换Fabric官方的裁剪算法。
- */
+
 @Mixin(Frustum.class)
 public class FrustumMixin {
     @Shadow private double camX;
