@@ -8,6 +8,7 @@ import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.culling.Frustum;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4f;
+import org.joml.Vector3d;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
@@ -22,7 +23,7 @@ public class LevelRendererMixin {
     @Shadow private net.minecraft.client.renderer.blockentity.BlockEntityRenderDispatcher blockEntityRenderDispatcher;
     @Shadow private Frustum capturedFrustum;
     @Shadow private Frustum cullingFrustum;
-    @Shadow private Vec3 frustumPos;
+    @Shadow private Vector3d frustumPos;
     @Shadow private boolean captureFrustum;
 
     @Inject(at = @At("HEAD"), method = "renderLevel")
