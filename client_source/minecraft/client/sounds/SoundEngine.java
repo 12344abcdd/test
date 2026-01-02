@@ -1,0 +1,560 @@
+package net.minecraft.client.sounds;
+
+import com.google.common.collect.HashMultimap;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Multimap;
+import com.google.common.collect.Sets;
+import com.mojang.blaze3d.audio.Channel;
+import com.mojang.blaze3d.audio.Library;
+import com.mojang.blaze3d.audio.Listener;
+import com.mojang.blaze3d.audio.ListenerTransform;
+import com.mojang.logging.LogUtils;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.Map.Entry;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicReference;
+import net.fabricmc.api.EnvType;
+import net.fabricmc.api.Environment;
+import net.minecraft.SharedConstants;
+import net.minecraft.Util;
+import net.minecraft.client.Camera;
+import net.minecraft.client.Options;
+import net.minecraft.client.resources.sounds.Sound;
+import net.minecraft.client.resources.sounds.SoundInstance;
+import net.minecraft.client.resources.sounds.TickableSoundInstance;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.packs.resources.ResourceProvider;
+import net.minecraft.sounds.SoundEvent;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.util.Mth;
+import net.minecraft.world.phys.Vec3;
+import org.jetbrains.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.Marker;
+import org.slf4j.MarkerFactory;
+
+@Environment(EnvType.CLIENT)
+public class SoundEngine {
+   private static final Marker MARKER = MarkerFactory.getMarker("SOUNDS");
+   private static final Logger LOGGER = LogUtils.getLogger();
+   private static final float PITCH_MIN = 0.5F;
+   private static final float PITCH_MAX = 2.0F;
+   private static final float VOLUME_MIN = 0.0F;
+   private static final float VOLUME_MAX = 1.0F;
+   private static final int MIN_SOURCE_LIFETIME = 20;
+   private static final Set<ResourceLocation> ONLY_WARN_ONCE = Sets.newHashSet();
+   private static final long DEFAULT_DEVICE_CHECK_INTERVAL_MS = 1000L;
+   public static final String MISSING_SOUND = "FOR THE DEBUG!";
+   public static final String OPEN_AL_SOFT_PREFIX = "OpenAL Soft on ";
+   public static final int OPEN_AL_SOFT_PREFIX_LENGTH = "OpenAL Soft on ".length();
+   private final SoundManager soundManager;
+   private final Options options;
+   private boolean loaded;
+   private final Library library = new Library();
+   private final Listener listener;
+   private final SoundBufferLibrary soundBuffers;
+   private final SoundEngineExecutor executor;
+   private final ChannelAccess channelAccess;
+   private int tickCount;
+   private long lastDeviceCheckTime;
+   private final AtomicReference<SoundEngine.DeviceCheckState> devicePoolState;
+   private final Map<SoundInstance, ChannelAccess.ChannelHandle> instanceToChannel;
+   private final Multimap<SoundSource, SoundInstance> instanceBySource;
+   private final List<TickableSoundInstance> tickingSounds;
+   private final Map<SoundInstance, Integer> queuedSounds;
+   private final Map<SoundInstance, Integer> soundDeleteTime;
+   private final List<SoundEventListener> listeners;
+   private final List<TickableSoundInstance> queuedTickableSounds;
+   private final List<Sound> preloadQueue;
+
+   public SoundEngine(SoundManager soundManager, Options options, ResourceProvider resourceProvider) {
+      this.listener = this.library.getListener();
+      this.executor = new SoundEngineExecutor();
+      this.channelAccess = new ChannelAccess(this.library, this.executor);
+      this.devicePoolState = new AtomicReference(SoundEngine.DeviceCheckState.NO_CHANGE);
+      this.instanceToChannel = Maps.newHashMap();
+      this.instanceBySource = HashMultimap.create();
+      this.tickingSounds = Lists.newArrayList();
+      this.queuedSounds = Maps.newHashMap();
+      this.soundDeleteTime = Maps.newHashMap();
+      this.listeners = Lists.newArrayList();
+      this.queuedTickableSounds = Lists.newArrayList();
+      this.preloadQueue = Lists.newArrayList();
+      this.soundManager = soundManager;
+      this.options = options;
+      this.soundBuffers = new SoundBufferLibrary(resourceProvider);
+   }
+
+   public void reload() {
+      ONLY_WARN_ONCE.clear();
+      Iterator var1 = BuiltInRegistries.SOUND_EVENT.iterator();
+
+      while(var1.hasNext()) {
+         SoundEvent soundEvent = (SoundEvent)var1.next();
+         if (soundEvent != SoundEvents.EMPTY) {
+            ResourceLocation resourceLocation = soundEvent.getLocation();
+            if (this.soundManager.getSoundEvent(resourceLocation) == null) {
+               LOGGER.warn("Missing sound for event: {}", BuiltInRegistries.SOUND_EVENT.getKey(soundEvent));
+               ONLY_WARN_ONCE.add(resourceLocation);
+            }
+         }
+      }
+
+      this.destroy();
+      this.loadLibrary();
+   }
+
+   private synchronized void loadLibrary() {
+      if (!this.loaded) {
+         try {
+            String string = (String)this.options.soundDevice().get();
+            this.library.init("".equals(string) ? null : string, (Boolean)this.options.directionalAudio().get());
+            this.listener.reset();
+            this.listener.setGain(this.options.getSoundSourceVolume(SoundSource.MASTER));
+            CompletableFuture var10000 = this.soundBuffers.preload(this.preloadQueue);
+            List var10001 = this.preloadQueue;
+            Objects.requireNonNull(var10001);
+            var10000.thenRun(var10001::clear);
+            this.loaded = true;
+            LOGGER.info(MARKER, "Sound engine started");
+         } catch (RuntimeException var2) {
+            LOGGER.error(MARKER, "Error starting SoundSystem. Turning off sounds & music", var2);
+         }
+
+      }
+   }
+
+   private float getVolume(@Nullable SoundSource soundSource) {
+      return soundSource != null && soundSource != SoundSource.MASTER ? this.options.getSoundSourceVolume(soundSource) : 1.0F;
+   }
+
+   public void updateCategoryVolume(SoundSource soundSource, float f) {
+      if (this.loaded) {
+         if (soundSource == SoundSource.MASTER) {
+            this.listener.setGain(f);
+         } else {
+            this.instanceToChannel.forEach((soundInstance, channelHandle) -> {
+               float f = this.calculateVolume(soundInstance);
+               channelHandle.execute((channel) -> {
+                  if (f <= 0.0F) {
+                     channel.stop();
+                  } else {
+                     channel.setVolume(f);
+                  }
+
+               });
+            });
+         }
+      }
+   }
+
+   public void destroy() {
+      if (this.loaded) {
+         this.stopAll();
+         this.soundBuffers.clear();
+         this.library.cleanup();
+         this.loaded = false;
+      }
+
+   }
+
+   public void emergencyShutdown() {
+      if (this.loaded) {
+         this.library.cleanup();
+      }
+
+   }
+
+   public void stop(SoundInstance soundInstance) {
+      if (this.loaded) {
+         ChannelAccess.ChannelHandle channelHandle = (ChannelAccess.ChannelHandle)this.instanceToChannel.get(soundInstance);
+         if (channelHandle != null) {
+            channelHandle.execute(Channel::stop);
+         }
+      }
+
+   }
+
+   public void stopAll() {
+      if (this.loaded) {
+         this.executor.flush();
+         this.instanceToChannel.values().forEach((channelHandle) -> {
+            channelHandle.execute(Channel::stop);
+         });
+         this.instanceToChannel.clear();
+         this.channelAccess.clear();
+         this.queuedSounds.clear();
+         this.tickingSounds.clear();
+         this.instanceBySource.clear();
+         this.soundDeleteTime.clear();
+         this.queuedTickableSounds.clear();
+      }
+
+   }
+
+   public void addEventListener(SoundEventListener soundEventListener) {
+      this.listeners.add(soundEventListener);
+   }
+
+   public void removeEventListener(SoundEventListener soundEventListener) {
+      this.listeners.remove(soundEventListener);
+   }
+
+   private boolean shouldChangeDevice() {
+      if (this.library.isCurrentDeviceDisconnected()) {
+         LOGGER.info("Audio device was lost!");
+         return true;
+      } else {
+         long l = Util.getMillis();
+         boolean bl = l - this.lastDeviceCheckTime >= 1000L;
+         if (bl) {
+            this.lastDeviceCheckTime = l;
+            if (this.devicePoolState.compareAndSet(SoundEngine.DeviceCheckState.NO_CHANGE, SoundEngine.DeviceCheckState.ONGOING)) {
+               String string = (String)this.options.soundDevice().get();
+               Util.ioPool().execute(() -> {
+                  if ("".equals(string)) {
+                     if (this.library.hasDefaultDeviceChanged()) {
+                        LOGGER.info("System default audio device has changed!");
+                        this.devicePoolState.compareAndSet(SoundEngine.DeviceCheckState.ONGOING, SoundEngine.DeviceCheckState.CHANGE_DETECTED);
+                     }
+                  } else if (!this.library.getCurrentDeviceName().equals(string) && this.library.getAvailableSoundDevices().contains(string)) {
+                     LOGGER.info("Preferred audio device has become available!");
+                     this.devicePoolState.compareAndSet(SoundEngine.DeviceCheckState.ONGOING, SoundEngine.DeviceCheckState.CHANGE_DETECTED);
+                  }
+
+                  this.devicePoolState.compareAndSet(SoundEngine.DeviceCheckState.ONGOING, SoundEngine.DeviceCheckState.NO_CHANGE);
+               });
+            }
+         }
+
+         return this.devicePoolState.compareAndSet(SoundEngine.DeviceCheckState.CHANGE_DETECTED, SoundEngine.DeviceCheckState.NO_CHANGE);
+      }
+   }
+
+   public void tick(boolean bl) {
+      if (this.shouldChangeDevice()) {
+         this.reload();
+      }
+
+      if (!bl) {
+         this.tickNonPaused();
+      }
+
+      this.channelAccess.scheduleTick();
+   }
+
+   private void tickNonPaused() {
+      ++this.tickCount;
+      this.queuedTickableSounds.stream().filter(SoundInstance::canPlaySound).forEach(this::play);
+      this.queuedTickableSounds.clear();
+      Iterator iterator = this.tickingSounds.iterator();
+
+      while(iterator.hasNext()) {
+         TickableSoundInstance tickableSoundInstance = (TickableSoundInstance)iterator.next();
+         if (!tickableSoundInstance.canPlaySound()) {
+            this.stop(tickableSoundInstance);
+         }
+
+         tickableSoundInstance.tick();
+         if (tickableSoundInstance.isStopped()) {
+            this.stop(tickableSoundInstance);
+         } else {
+            float f = this.calculateVolume(tickableSoundInstance);
+            float g = this.calculatePitch(tickableSoundInstance);
+            Vec3 vec3 = new Vec3(tickableSoundInstance.getX(), tickableSoundInstance.getY(), tickableSoundInstance.getZ());
+            ChannelAccess.ChannelHandle channelHandle = (ChannelAccess.ChannelHandle)this.instanceToChannel.get(tickableSoundInstance);
+            if (channelHandle != null) {
+               channelHandle.execute((channel) -> {
+                  channel.setVolume(f);
+                  channel.setPitch(g);
+                  channel.setSelfPosition(vec3);
+               });
+            }
+         }
+      }
+
+      iterator = this.instanceToChannel.entrySet().iterator();
+
+      SoundInstance soundInstance;
+      while(iterator.hasNext()) {
+         Entry<SoundInstance, ChannelAccess.ChannelHandle> entry = (Entry)iterator.next();
+         ChannelAccess.ChannelHandle channelHandle2 = (ChannelAccess.ChannelHandle)entry.getValue();
+         soundInstance = (SoundInstance)entry.getKey();
+         float h = this.options.getSoundSourceVolume(soundInstance.getSource());
+         if (h <= 0.0F) {
+            channelHandle2.execute(Channel::stop);
+            iterator.remove();
+         } else if (channelHandle2.isStopped()) {
+            int i = (Integer)this.soundDeleteTime.get(soundInstance);
+            if (i <= this.tickCount) {
+               if (shouldLoopManually(soundInstance)) {
+                  this.queuedSounds.put(soundInstance, this.tickCount + soundInstance.getDelay());
+               }
+
+               iterator.remove();
+               LOGGER.debug(MARKER, "Removed channel {} because it's not playing anymore", channelHandle2);
+               this.soundDeleteTime.remove(soundInstance);
+
+               try {
+                  this.instanceBySource.remove(soundInstance.getSource(), soundInstance);
+               } catch (RuntimeException var8) {
+               }
+
+               if (soundInstance instanceof TickableSoundInstance) {
+                  this.tickingSounds.remove(soundInstance);
+               }
+            }
+         }
+      }
+
+      Iterator iterator2 = this.queuedSounds.entrySet().iterator();
+
+      while(iterator2.hasNext()) {
+         Entry<SoundInstance, Integer> entry2 = (Entry)iterator2.next();
+         if (this.tickCount >= (Integer)entry2.getValue()) {
+            soundInstance = (SoundInstance)entry2.getKey();
+            if (soundInstance instanceof TickableSoundInstance) {
+               ((TickableSoundInstance)soundInstance).tick();
+            }
+
+            this.play(soundInstance);
+            iterator2.remove();
+         }
+      }
+
+   }
+
+   private static boolean requiresManualLooping(SoundInstance soundInstance) {
+      return soundInstance.getDelay() > 0;
+   }
+
+   private static boolean shouldLoopManually(SoundInstance soundInstance) {
+      return soundInstance.isLooping() && requiresManualLooping(soundInstance);
+   }
+
+   private static boolean shouldLoopAutomatically(SoundInstance soundInstance) {
+      return soundInstance.isLooping() && !requiresManualLooping(soundInstance);
+   }
+
+   public boolean isActive(SoundInstance soundInstance) {
+      if (!this.loaded) {
+         return false;
+      } else {
+         return this.soundDeleteTime.containsKey(soundInstance) && (Integer)this.soundDeleteTime.get(soundInstance) <= this.tickCount ? true : this.instanceToChannel.containsKey(soundInstance);
+      }
+   }
+
+   public void play(SoundInstance soundInstance) {
+      if (this.loaded) {
+         if (soundInstance.canPlaySound()) {
+            WeighedSoundEvents weighedSoundEvents = soundInstance.resolve(this.soundManager);
+            ResourceLocation resourceLocation = soundInstance.getLocation();
+            if (weighedSoundEvents == null) {
+               if (ONLY_WARN_ONCE.add(resourceLocation)) {
+                  LOGGER.warn(MARKER, "Unable to play unknown soundEvent: {}", resourceLocation);
+               }
+
+            } else {
+               Sound sound = soundInstance.getSound();
+               if (sound != SoundManager.INTENTIONALLY_EMPTY_SOUND) {
+                  if (sound == SoundManager.EMPTY_SOUND) {
+                     if (ONLY_WARN_ONCE.add(resourceLocation)) {
+                        LOGGER.warn(MARKER, "Unable to play empty soundEvent: {}", resourceLocation);
+                     }
+
+                  } else {
+                     float f = soundInstance.getVolume();
+                     float g = Math.max(f, 1.0F) * (float)sound.getAttenuationDistance();
+                     SoundSource soundSource = soundInstance.getSource();
+                     float h = this.calculateVolume(f, soundSource);
+                     float i = this.calculatePitch(soundInstance);
+                     SoundInstance.Attenuation attenuation = soundInstance.getAttenuation();
+                     boolean bl = soundInstance.isRelative();
+                     if (h == 0.0F && !soundInstance.canStartSilent()) {
+                        LOGGER.debug(MARKER, "Skipped playing sound {}, volume was zero.", sound.getLocation());
+                     } else {
+                        Vec3 vec3 = new Vec3(soundInstance.getX(), soundInstance.getY(), soundInstance.getZ());
+                        if (!this.listeners.isEmpty()) {
+                           float j = !bl && attenuation != SoundInstance.Attenuation.NONE ? g : Float.POSITIVE_INFINITY;
+                           Iterator var14 = this.listeners.iterator();
+
+                           while(var14.hasNext()) {
+                              SoundEventListener soundEventListener = (SoundEventListener)var14.next();
+                              soundEventListener.onPlaySound(soundInstance, weighedSoundEvents, j);
+                           }
+                        }
+
+                        if (this.listener.getGain() <= 0.0F) {
+                           LOGGER.debug(MARKER, "Skipped playing soundEvent: {}, master volume was zero", resourceLocation);
+                        } else {
+                           boolean bl2 = shouldLoopAutomatically(soundInstance);
+                           boolean bl3 = sound.shouldStream();
+                           CompletableFuture<ChannelAccess.ChannelHandle> completableFuture = this.channelAccess.createHandle(sound.shouldStream() ? Library.Pool.STREAMING : Library.Pool.STATIC);
+                           ChannelAccess.ChannelHandle channelHandle = (ChannelAccess.ChannelHandle)completableFuture.join();
+                           if (channelHandle == null) {
+                              if (SharedConstants.IS_RUNNING_IN_IDE) {
+                                 LOGGER.warn("Failed to create new sound handle");
+                              }
+
+                           } else {
+                              LOGGER.debug(MARKER, "Playing sound {} for event {}", sound.getLocation(), resourceLocation);
+                              this.soundDeleteTime.put(soundInstance, this.tickCount + 20);
+                              this.instanceToChannel.put(soundInstance, channelHandle);
+                              this.instanceBySource.put(soundSource, soundInstance);
+                              channelHandle.execute((channel) -> {
+                                 channel.setPitch(i);
+                                 channel.setVolume(h);
+                                 if (attenuation == SoundInstance.Attenuation.LINEAR) {
+                                    channel.linearAttenuation(g);
+                                 } else {
+                                    channel.disableAttenuation();
+                                 }
+
+                                 channel.setLooping(bl2 && !bl3);
+                                 channel.setSelfPosition(vec3);
+                                 channel.setRelative(bl);
+                              });
+                              if (!bl3) {
+                                 this.soundBuffers.getCompleteBuffer(sound.getPath()).thenAccept((soundBuffer) -> {
+                                    channelHandle.execute((channel) -> {
+                                       channel.attachStaticBuffer(soundBuffer);
+                                       channel.play();
+                                    });
+                                 });
+                              } else {
+                                 this.soundBuffers.getStream(sound.getPath(), bl2).thenAccept((audioStream) -> {
+                                    channelHandle.execute((channel) -> {
+                                       channel.attachBufferStream(audioStream);
+                                       channel.play();
+                                    });
+                                 });
+                              }
+
+                              if (soundInstance instanceof TickableSoundInstance) {
+                                 this.tickingSounds.add((TickableSoundInstance)soundInstance);
+                              }
+
+                           }
+                        }
+                     }
+                  }
+               }
+            }
+         }
+      }
+   }
+
+   public void queueTickingSound(TickableSoundInstance tickableSoundInstance) {
+      this.queuedTickableSounds.add(tickableSoundInstance);
+   }
+
+   public void requestPreload(Sound sound) {
+      this.preloadQueue.add(sound);
+   }
+
+   private float calculatePitch(SoundInstance soundInstance) {
+      return Mth.clamp(soundInstance.getPitch(), 0.5F, 2.0F);
+   }
+
+   private float calculateVolume(SoundInstance soundInstance) {
+      return this.calculateVolume(soundInstance.getVolume(), soundInstance.getSource());
+   }
+
+   private float calculateVolume(float f, SoundSource soundSource) {
+      return Mth.clamp(f * this.getVolume(soundSource), 0.0F, 1.0F);
+   }
+
+   public void pause() {
+      if (this.loaded) {
+         this.channelAccess.executeOnChannels((stream) -> {
+            stream.forEach(Channel::pause);
+         });
+      }
+
+   }
+
+   public void resume() {
+      if (this.loaded) {
+         this.channelAccess.executeOnChannels((stream) -> {
+            stream.forEach(Channel::unpause);
+         });
+      }
+
+   }
+
+   public void playDelayed(SoundInstance soundInstance, int i) {
+      this.queuedSounds.put(soundInstance, this.tickCount + i);
+   }
+
+   public void updateSource(Camera camera) {
+      if (this.loaded && camera.isInitialized()) {
+         ListenerTransform listenerTransform = new ListenerTransform(camera.getPosition(), new Vec3(camera.getLookVector()), new Vec3(camera.getUpVector()));
+         this.executor.execute(() -> {
+            this.listener.setTransform(listenerTransform);
+         });
+      }
+   }
+
+   public void stop(@Nullable ResourceLocation resourceLocation, @Nullable SoundSource soundSource) {
+      Iterator var3;
+      SoundInstance soundInstance;
+      if (soundSource != null) {
+         var3 = this.instanceBySource.get(soundSource).iterator();
+
+         while(true) {
+            do {
+               if (!var3.hasNext()) {
+                  return;
+               }
+
+               soundInstance = (SoundInstance)var3.next();
+            } while(resourceLocation != null && !soundInstance.getLocation().equals(resourceLocation));
+
+            this.stop(soundInstance);
+         }
+      } else if (resourceLocation == null) {
+         this.stopAll();
+      } else {
+         var3 = this.instanceToChannel.keySet().iterator();
+
+         while(var3.hasNext()) {
+            soundInstance = (SoundInstance)var3.next();
+            if (soundInstance.getLocation().equals(resourceLocation)) {
+               this.stop(soundInstance);
+            }
+         }
+      }
+
+   }
+
+   public String getDebugString() {
+      return this.library.getDebugString();
+   }
+
+   public List<String> getAvailableSoundDevices() {
+      return this.library.getAvailableSoundDevices();
+   }
+
+   public ListenerTransform getListenerTransform() {
+      return this.listener.getTransform();
+   }
+
+   @Environment(EnvType.CLIENT)
+   static enum DeviceCheckState {
+      ONGOING,
+      CHANGE_DETECTED,
+      NO_CHANGE;
+
+      // $FF: synthetic method
+      private static SoundEngine.DeviceCheckState[] $values() {
+         return new SoundEngine.DeviceCheckState[]{ONGOING, CHANGE_DETECTED, NO_CHANGE};
+      }
+   }
+}

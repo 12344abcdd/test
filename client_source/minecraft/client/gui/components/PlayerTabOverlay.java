@@ -1,0 +1,442 @@
+package net.minecraft.client.gui.components;
+
+import com.mojang.authlib.GameProfile;
+import com.mojang.blaze3d.systems.RenderSystem;
+import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
+import java.util.stream.Collectors;
+import net.fabricmc.api.EnvType;
+import net.fabricmc.api.Environment;
+import net.minecraft.ChatFormatting;
+import net.minecraft.Optionull;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Gui;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.multiplayer.PlayerInfo;
+import net.minecraft.client.renderer.entity.LivingEntityRenderer;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.ComponentUtils;
+import net.minecraft.network.chat.FormattedText;
+import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.network.chat.numbers.NumberFormat;
+import net.minecraft.network.chat.numbers.StyledFormat;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.util.FormattedCharSequence;
+import net.minecraft.util.Mth;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.entity.player.PlayerModelPart;
+import net.minecraft.world.level.GameType;
+import net.minecraft.world.scores.Objective;
+import net.minecraft.world.scores.PlayerTeam;
+import net.minecraft.world.scores.ReadOnlyScoreInfo;
+import net.minecraft.world.scores.ScoreHolder;
+import net.minecraft.world.scores.Scoreboard;
+import net.minecraft.world.scores.criteria.ObjectiveCriteria.RenderType;
+import org.jetbrains.annotations.Nullable;
+
+@Environment(EnvType.CLIENT)
+public class PlayerTabOverlay {
+   private static final ResourceLocation PING_UNKNOWN_SPRITE = ResourceLocation.withDefaultNamespace("icon/ping_unknown");
+   private static final ResourceLocation PING_1_SPRITE = ResourceLocation.withDefaultNamespace("icon/ping_1");
+   private static final ResourceLocation PING_2_SPRITE = ResourceLocation.withDefaultNamespace("icon/ping_2");
+   private static final ResourceLocation PING_3_SPRITE = ResourceLocation.withDefaultNamespace("icon/ping_3");
+   private static final ResourceLocation PING_4_SPRITE = ResourceLocation.withDefaultNamespace("icon/ping_4");
+   private static final ResourceLocation PING_5_SPRITE = ResourceLocation.withDefaultNamespace("icon/ping_5");
+   private static final ResourceLocation HEART_CONTAINER_BLINKING_SPRITE = ResourceLocation.withDefaultNamespace("hud/heart/container_blinking");
+   private static final ResourceLocation HEART_CONTAINER_SPRITE = ResourceLocation.withDefaultNamespace("hud/heart/container");
+   private static final ResourceLocation HEART_FULL_BLINKING_SPRITE = ResourceLocation.withDefaultNamespace("hud/heart/full_blinking");
+   private static final ResourceLocation HEART_HALF_BLINKING_SPRITE = ResourceLocation.withDefaultNamespace("hud/heart/half_blinking");
+   private static final ResourceLocation HEART_ABSORBING_FULL_BLINKING_SPRITE = ResourceLocation.withDefaultNamespace("hud/heart/absorbing_full_blinking");
+   private static final ResourceLocation HEART_FULL_SPRITE = ResourceLocation.withDefaultNamespace("hud/heart/full");
+   private static final ResourceLocation HEART_ABSORBING_HALF_BLINKING_SPRITE = ResourceLocation.withDefaultNamespace("hud/heart/absorbing_half_blinking");
+   private static final ResourceLocation HEART_HALF_SPRITE = ResourceLocation.withDefaultNamespace("hud/heart/half");
+   private static final Comparator<PlayerInfo> PLAYER_COMPARATOR = Comparator.comparingInt((playerInfo) -> {
+      return playerInfo.getGameMode() == GameType.SPECTATOR ? 1 : 0;
+   }).thenComparing((playerInfo) -> {
+      return (String)Optionull.mapOrDefault(playerInfo.getTeam(), PlayerTeam::getName, "");
+   }).thenComparing((playerInfo) -> {
+      return playerInfo.getProfile().getName();
+   }, String::compareToIgnoreCase);
+   public static final int MAX_ROWS_PER_COL = 20;
+   private final Minecraft minecraft;
+   private final Gui gui;
+   @Nullable
+   private Component footer;
+   @Nullable
+   private Component header;
+   private boolean visible;
+   private final Map<UUID, PlayerTabOverlay.HealthState> healthStates = new Object2ObjectOpenHashMap();
+
+   public PlayerTabOverlay(Minecraft minecraft, Gui gui) {
+      this.minecraft = minecraft;
+      this.gui = gui;
+   }
+
+   public Component getNameForDisplay(PlayerInfo playerInfo) {
+      return playerInfo.getTabListDisplayName() != null ? this.decorateName(playerInfo, playerInfo.getTabListDisplayName().copy()) : this.decorateName(playerInfo, PlayerTeam.formatNameForTeam(playerInfo.getTeam(), Component.literal(playerInfo.getProfile().getName())));
+   }
+
+   private Component decorateName(PlayerInfo playerInfo, MutableComponent mutableComponent) {
+      return playerInfo.getGameMode() == GameType.SPECTATOR ? mutableComponent.withStyle(ChatFormatting.ITALIC) : mutableComponent;
+   }
+
+   public void setVisible(boolean bl) {
+      if (this.visible != bl) {
+         this.healthStates.clear();
+         this.visible = bl;
+         if (bl) {
+            Component component = ComponentUtils.formatList(this.getPlayerInfos(), Component.literal(", "), this::getNameForDisplay);
+            this.minecraft.getNarrator().sayNow((Component)Component.translatable("multiplayer.player.list.narration", new Object[]{component}));
+         }
+      }
+
+   }
+
+   private List<PlayerInfo> getPlayerInfos() {
+      return this.minecraft.player.connection.getListedOnlinePlayers().stream().sorted(PLAYER_COMPARATOR).limit(80L).toList();
+   }
+
+   public void render(GuiGraphics guiGraphics, int i, Scoreboard scoreboard, @Nullable Objective objective) {
+      List<PlayerInfo> list = this.getPlayerInfos();
+      List<PlayerTabOverlay.ScoreDisplayEntry> list2 = new ArrayList(list.size());
+      int j = this.minecraft.font.width(" ");
+      int k = 0;
+      int l = 0;
+
+      Component component;
+      int m;
+      MutableComponent component2;
+      int n;
+      for(Iterator var10 = list.iterator(); var10.hasNext(); list2.add(new PlayerTabOverlay.ScoreDisplayEntry(component, m, component2, n))) {
+         PlayerInfo playerInfo = (PlayerInfo)var10.next();
+         component = this.getNameForDisplay(playerInfo);
+         k = Math.max(k, this.minecraft.font.width((FormattedText)component));
+         m = 0;
+         component2 = null;
+         n = 0;
+         if (objective != null) {
+            ScoreHolder scoreHolder = ScoreHolder.fromGameProfile(playerInfo.getProfile());
+            ReadOnlyScoreInfo readOnlyScoreInfo = scoreboard.getPlayerScoreInfo(scoreHolder, objective);
+            if (readOnlyScoreInfo != null) {
+               m = readOnlyScoreInfo.value();
+            }
+
+            if (objective.getRenderType() != RenderType.HEARTS) {
+               NumberFormat numberFormat = objective.numberFormatOrDefault(StyledFormat.PLAYER_LIST_DEFAULT);
+               component2 = ReadOnlyScoreInfo.safeFormatValue(readOnlyScoreInfo, numberFormat);
+               n = this.minecraft.font.width((FormattedText)component2);
+               l = Math.max(l, n > 0 ? j + n : 0);
+            }
+         }
+      }
+
+      if (!this.healthStates.isEmpty()) {
+         Set<UUID> set = (Set)list.stream().map((playerInfox) -> {
+            return playerInfox.getProfile().getId();
+         }).collect(Collectors.toSet());
+         this.healthStates.keySet().removeIf((uUID) -> {
+            return !set.contains(uUID);
+         });
+      }
+
+      int o = list.size();
+      int p = o;
+
+      int q;
+      for(q = 1; p > 20; p = (o + q - 1) / q) {
+         ++q;
+      }
+
+      boolean bl = this.minecraft.isLocalServer() || this.minecraft.getConnection().getConnection().isEncrypted();
+      int r;
+      if (objective != null) {
+         if (objective.getRenderType() == RenderType.HEARTS) {
+            r = 90;
+         } else {
+            r = l;
+         }
+      } else {
+         r = 0;
+      }
+
+      n = Math.min(q * ((bl ? 9 : 0) + k + r + 13), i - 50) / q;
+      int s = i / 2 - (n * q + (q - 1) * 5) / 2;
+      int t = 10;
+      int u = n * q + (q - 1) * 5;
+      List<FormattedCharSequence> list3 = null;
+      if (this.header != null) {
+         list3 = this.minecraft.font.split(this.header, i - 50);
+
+         FormattedCharSequence formattedCharSequence;
+         for(Iterator var20 = list3.iterator(); var20.hasNext(); u = Math.max(u, this.minecraft.font.width(formattedCharSequence))) {
+            formattedCharSequence = (FormattedCharSequence)var20.next();
+         }
+      }
+
+      List<FormattedCharSequence> list4 = null;
+      FormattedCharSequence formattedCharSequence2;
+      Iterator var43;
+      if (this.footer != null) {
+         list4 = this.minecraft.font.split(this.footer, i - 50);
+
+         for(var43 = list4.iterator(); var43.hasNext(); u = Math.max(u, this.minecraft.font.width(formattedCharSequence2))) {
+            formattedCharSequence2 = (FormattedCharSequence)var43.next();
+         }
+      }
+
+      int var10001;
+      int var10002;
+      int var10003;
+      int var10005;
+      int v;
+      if (list3 != null) {
+         var10001 = i / 2 - u / 2 - 1;
+         var10002 = t - 1;
+         var10003 = i / 2 + u / 2 + 1;
+         var10005 = list3.size();
+         Objects.requireNonNull(this.minecraft.font);
+         guiGraphics.fill(var10001, var10002, var10003, t + var10005 * 9, Integer.MIN_VALUE);
+
+         for(var43 = list3.iterator(); var43.hasNext(); t += 9) {
+            formattedCharSequence2 = (FormattedCharSequence)var43.next();
+            v = this.minecraft.font.width(formattedCharSequence2);
+            guiGraphics.drawString(this.minecraft.font, (FormattedCharSequence)formattedCharSequence2, i / 2 - v / 2, t, -1);
+            Objects.requireNonNull(this.minecraft.font);
+         }
+
+         ++t;
+      }
+
+      guiGraphics.fill(i / 2 - u / 2 - 1, t - 1, i / 2 + u / 2 + 1, t + p * 9, Integer.MIN_VALUE);
+      int w = this.minecraft.options.getBackgroundColor(553648127);
+
+      int y;
+      for(int x = 0; x < o; ++x) {
+         v = x / p;
+         y = x % p;
+         int z = s + v * n + v * 5;
+         int aa = t + y * 9;
+         guiGraphics.fill(z, aa, z + n, aa + 8, w);
+         RenderSystem.enableBlend();
+         if (x < list.size()) {
+            PlayerInfo playerInfo2 = (PlayerInfo)list.get(x);
+            PlayerTabOverlay.ScoreDisplayEntry scoreDisplayEntry = (PlayerTabOverlay.ScoreDisplayEntry)list2.get(x);
+            GameProfile gameProfile = playerInfo2.getProfile();
+            if (bl) {
+               Player player = this.minecraft.level.getPlayerByUUID(gameProfile.getId());
+               boolean bl2 = player != null && LivingEntityRenderer.isEntityUpsideDown(player);
+               boolean bl3 = player != null && player.isModelPartShown(PlayerModelPart.HAT);
+               PlayerFaceRenderer.draw(guiGraphics, playerInfo2.getSkin().texture(), z, aa, 8, bl3, bl2);
+               z += 9;
+            }
+
+            guiGraphics.drawString(this.minecraft.font, scoreDisplayEntry.name, z, aa, playerInfo2.getGameMode() == GameType.SPECTATOR ? -1862270977 : -1);
+            if (objective != null && playerInfo2.getGameMode() != GameType.SPECTATOR) {
+               int ab = z + k + 1;
+               int ac = ab + r;
+               if (ac - ab > 5) {
+                  this.renderTablistScore(objective, aa, scoreDisplayEntry, ab, ac, gameProfile.getId(), guiGraphics);
+               }
+            }
+
+            this.renderPingIcon(guiGraphics, n, z - (bl ? 9 : 0), aa, playerInfo2);
+         }
+      }
+
+      if (list4 != null) {
+         t += p * 9 + 1;
+         var10001 = i / 2 - u / 2 - 1;
+         var10002 = t - 1;
+         var10003 = i / 2 + u / 2 + 1;
+         var10005 = list4.size();
+         Objects.requireNonNull(this.minecraft.font);
+         guiGraphics.fill(var10001, var10002, var10003, t + var10005 * 9, Integer.MIN_VALUE);
+
+         for(Iterator var46 = list4.iterator(); var46.hasNext(); t += 9) {
+            FormattedCharSequence formattedCharSequence3 = (FormattedCharSequence)var46.next();
+            y = this.minecraft.font.width(formattedCharSequence3);
+            guiGraphics.drawString(this.minecraft.font, (FormattedCharSequence)formattedCharSequence3, i / 2 - y / 2, t, -1);
+            Objects.requireNonNull(this.minecraft.font);
+         }
+      }
+
+   }
+
+   protected void renderPingIcon(GuiGraphics guiGraphics, int i, int j, int k, PlayerInfo playerInfo) {
+      ResourceLocation resourceLocation;
+      if (playerInfo.getLatency() < 0) {
+         resourceLocation = PING_UNKNOWN_SPRITE;
+      } else if (playerInfo.getLatency() < 150) {
+         resourceLocation = PING_5_SPRITE;
+      } else if (playerInfo.getLatency() < 300) {
+         resourceLocation = PING_4_SPRITE;
+      } else if (playerInfo.getLatency() < 600) {
+         resourceLocation = PING_3_SPRITE;
+      } else if (playerInfo.getLatency() < 1000) {
+         resourceLocation = PING_2_SPRITE;
+      } else {
+         resourceLocation = PING_1_SPRITE;
+      }
+
+      guiGraphics.pose().pushPose();
+      guiGraphics.pose().translate(0.0F, 0.0F, 100.0F);
+      guiGraphics.blitSprite(resourceLocation, j + i - 11, k, 10, 8);
+      guiGraphics.pose().popPose();
+   }
+
+   private void renderTablistScore(Objective objective, int i, PlayerTabOverlay.ScoreDisplayEntry scoreDisplayEntry, int j, int k, UUID uUID, GuiGraphics guiGraphics) {
+      if (objective.getRenderType() == RenderType.HEARTS) {
+         this.renderTablistHearts(i, j, k, uUID, guiGraphics, scoreDisplayEntry.score);
+      } else if (scoreDisplayEntry.formattedScore != null) {
+         guiGraphics.drawString(this.minecraft.font, scoreDisplayEntry.formattedScore, k - scoreDisplayEntry.scoreWidth, i, 16777215);
+      }
+
+   }
+
+   private void renderTablistHearts(int i, int j, int k, UUID uUID, GuiGraphics guiGraphics, int l) {
+      PlayerTabOverlay.HealthState healthState = (PlayerTabOverlay.HealthState)this.healthStates.computeIfAbsent(uUID, (uUIDx) -> {
+         return new PlayerTabOverlay.HealthState(l);
+      });
+      healthState.update(l, (long)this.gui.getGuiTicks());
+      int m = Mth.positiveCeilDiv(Math.max(l, healthState.displayedValue()), 2);
+      int n = Math.max(l, Math.max(healthState.displayedValue(), 20)) / 2;
+      boolean bl = healthState.isBlinking((long)this.gui.getGuiTicks());
+      if (m > 0) {
+         int o = Mth.floor(Math.min((float)(k - j - 4) / (float)n, 9.0F));
+         int p;
+         if (o <= 3) {
+            float f = Mth.clamp((float)l / 20.0F, 0.0F, 1.0F);
+            p = (int)((1.0F - f) * 255.0F) << 16 | (int)(f * 255.0F) << 8;
+            float g = (float)l / 2.0F;
+            Component component = Component.translatable("multiplayer.player.list.hp", new Object[]{g});
+            MutableComponent component2;
+            if (k - this.minecraft.font.width((FormattedText)component) >= j) {
+               component2 = component;
+            } else {
+               component2 = Component.literal(Float.toString(g));
+            }
+
+            guiGraphics.drawString(this.minecraft.font, (Component)component2, (k + j - this.minecraft.font.width((FormattedText)component2)) / 2, i, p);
+         } else {
+            ResourceLocation resourceLocation = bl ? HEART_CONTAINER_BLINKING_SPRITE : HEART_CONTAINER_SPRITE;
+
+            for(p = m; p < n; ++p) {
+               guiGraphics.blitSprite(resourceLocation, j + p * o, i, 9, 9);
+            }
+
+            for(p = 0; p < m; ++p) {
+               guiGraphics.blitSprite(resourceLocation, j + p * o, i, 9, 9);
+               if (bl) {
+                  if (p * 2 + 1 < healthState.displayedValue()) {
+                     guiGraphics.blitSprite(HEART_FULL_BLINKING_SPRITE, j + p * o, i, 9, 9);
+                  }
+
+                  if (p * 2 + 1 == healthState.displayedValue()) {
+                     guiGraphics.blitSprite(HEART_HALF_BLINKING_SPRITE, j + p * o, i, 9, 9);
+                  }
+               }
+
+               if (p * 2 + 1 < l) {
+                  guiGraphics.blitSprite(p >= 10 ? HEART_ABSORBING_FULL_BLINKING_SPRITE : HEART_FULL_SPRITE, j + p * o, i, 9, 9);
+               }
+
+               if (p * 2 + 1 == l) {
+                  guiGraphics.blitSprite(p >= 10 ? HEART_ABSORBING_HALF_BLINKING_SPRITE : HEART_HALF_SPRITE, j + p * o, i, 9, 9);
+               }
+            }
+
+         }
+      }
+   }
+
+   public void setFooter(@Nullable Component component) {
+      this.footer = component;
+   }
+
+   public void setHeader(@Nullable Component component) {
+      this.header = component;
+   }
+
+   public void reset() {
+      this.header = null;
+      this.footer = null;
+   }
+
+   @Environment(EnvType.CLIENT)
+   static record ScoreDisplayEntry(Component name, int score, @Nullable Component formattedScore, int scoreWidth) {
+      final Component name;
+      final int score;
+      @Nullable
+      final Component formattedScore;
+      final int scoreWidth;
+
+      ScoreDisplayEntry(Component component, int i, @Nullable Component component2, int j) {
+         this.name = component;
+         this.score = i;
+         this.formattedScore = component2;
+         this.scoreWidth = j;
+      }
+
+      public Component name() {
+         return this.name;
+      }
+
+      public int score() {
+         return this.score;
+      }
+
+      @Nullable
+      public Component formattedScore() {
+         return this.formattedScore;
+      }
+
+      public int scoreWidth() {
+         return this.scoreWidth;
+      }
+   }
+
+   @Environment(EnvType.CLIENT)
+   static class HealthState {
+      private static final long DISPLAY_UPDATE_DELAY = 20L;
+      private static final long DECREASE_BLINK_DURATION = 20L;
+      private static final long INCREASE_BLINK_DURATION = 10L;
+      private int lastValue;
+      private int displayedValue;
+      private long lastUpdateTick;
+      private long blinkUntilTick;
+
+      public HealthState(int i) {
+         this.displayedValue = i;
+         this.lastValue = i;
+      }
+
+      public void update(int i, long l) {
+         if (i != this.lastValue) {
+            long m = i < this.lastValue ? 20L : 10L;
+            this.blinkUntilTick = l + m;
+            this.lastValue = i;
+            this.lastUpdateTick = l;
+         }
+
+         if (l - this.lastUpdateTick > 20L) {
+            this.displayedValue = i;
+         }
+
+      }
+
+      public int displayedValue() {
+         return this.displayedValue;
+      }
+
+      public boolean isBlinking(long l) {
+         return this.blinkUntilTick > l && (this.blinkUntilTick - l) % 6L >= 3L;
+      }
+   }
+}

@@ -1,0 +1,110 @@
+package net.minecraft.client.gui.screens.inventory;
+
+import net.fabricmc.api.EnvType;
+import net.fabricmc.api.Environment;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.inventory.CartographyTableMenu;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.item.MapItem;
+import net.minecraft.world.level.saveddata.maps.MapId;
+import net.minecraft.world.level.saveddata.maps.MapItemSavedData;
+import org.jetbrains.annotations.Nullable;
+
+@Environment(EnvType.CLIENT)
+public class CartographyTableScreen extends AbstractContainerScreen<CartographyTableMenu> {
+   private static final ResourceLocation ERROR_SPRITE = ResourceLocation.withDefaultNamespace("container/cartography_table/error");
+   private static final ResourceLocation SCALED_MAP_SPRITE = ResourceLocation.withDefaultNamespace("container/cartography_table/scaled_map");
+   private static final ResourceLocation DUPLICATED_MAP_SPRITE = ResourceLocation.withDefaultNamespace("container/cartography_table/duplicated_map");
+   private static final ResourceLocation MAP_SPRITE = ResourceLocation.withDefaultNamespace("container/cartography_table/map");
+   private static final ResourceLocation LOCKED_SPRITE = ResourceLocation.withDefaultNamespace("container/cartography_table/locked");
+   private static final ResourceLocation BG_LOCATION = ResourceLocation.withDefaultNamespace("textures/gui/container/cartography_table.png");
+
+   public CartographyTableScreen(CartographyTableMenu cartographyTableMenu, Inventory inventory, Component component) {
+      super(cartographyTableMenu, inventory, component);
+      this.titleLabelY -= 2;
+   }
+
+   public void render(GuiGraphics guiGraphics, int i, int j, float f) {
+      super.render(guiGraphics, i, j, f);
+      this.renderTooltip(guiGraphics, i, j);
+   }
+
+   protected void renderBg(GuiGraphics guiGraphics, float f, int i, int j) {
+      int k = this.leftPos;
+      int l = this.topPos;
+      guiGraphics.blit(BG_LOCATION, k, l, 0, 0, this.imageWidth, this.imageHeight);
+      ItemStack itemStack = ((CartographyTableMenu)this.menu).getSlot(1).getItem();
+      boolean bl = itemStack.is(Items.MAP);
+      boolean bl2 = itemStack.is(Items.PAPER);
+      boolean bl3 = itemStack.is(Items.GLASS_PANE);
+      ItemStack itemStack2 = ((CartographyTableMenu)this.menu).getSlot(0).getItem();
+      MapId mapId = (MapId)itemStack2.get(DataComponents.MAP_ID);
+      boolean bl4 = false;
+      MapItemSavedData mapItemSavedData;
+      if (mapId != null) {
+         mapItemSavedData = MapItem.getSavedData(mapId, this.minecraft.level);
+         if (mapItemSavedData != null) {
+            if (mapItemSavedData.locked) {
+               bl4 = true;
+               if (bl2 || bl3) {
+                  guiGraphics.blitSprite(ERROR_SPRITE, k + 35, l + 31, 28, 21);
+               }
+            }
+
+            if (bl2 && mapItemSavedData.scale >= 4) {
+               bl4 = true;
+               guiGraphics.blitSprite(ERROR_SPRITE, k + 35, l + 31, 28, 21);
+            }
+         }
+      } else {
+         mapItemSavedData = null;
+      }
+
+      this.renderResultingMap(guiGraphics, mapId, mapItemSavedData, bl, bl2, bl3, bl4);
+   }
+
+   private void renderResultingMap(GuiGraphics guiGraphics, @Nullable MapId mapId, @Nullable MapItemSavedData mapItemSavedData, boolean bl, boolean bl2, boolean bl3, boolean bl4) {
+      int i = this.leftPos;
+      int j = this.topPos;
+      if (bl2 && !bl4) {
+         guiGraphics.blitSprite(SCALED_MAP_SPRITE, i + 67, j + 13, 66, 66);
+         this.renderMap(guiGraphics, mapId, mapItemSavedData, i + 85, j + 31, 0.226F);
+      } else if (bl) {
+         guiGraphics.blitSprite(DUPLICATED_MAP_SPRITE, i + 67 + 16, j + 13, 50, 66);
+         this.renderMap(guiGraphics, mapId, mapItemSavedData, i + 86, j + 16, 0.34F);
+         guiGraphics.pose().pushPose();
+         guiGraphics.pose().translate(0.0F, 0.0F, 1.0F);
+         guiGraphics.blitSprite(DUPLICATED_MAP_SPRITE, i + 67, j + 13 + 16, 50, 66);
+         this.renderMap(guiGraphics, mapId, mapItemSavedData, i + 70, j + 32, 0.34F);
+         guiGraphics.pose().popPose();
+      } else if (bl3) {
+         guiGraphics.blitSprite(MAP_SPRITE, i + 67, j + 13, 66, 66);
+         this.renderMap(guiGraphics, mapId, mapItemSavedData, i + 71, j + 17, 0.45F);
+         guiGraphics.pose().pushPose();
+         guiGraphics.pose().translate(0.0F, 0.0F, 1.0F);
+         guiGraphics.blitSprite(LOCKED_SPRITE, i + 118, j + 60, 10, 14);
+         guiGraphics.pose().popPose();
+      } else {
+         guiGraphics.blitSprite(MAP_SPRITE, i + 67, j + 13, 66, 66);
+         this.renderMap(guiGraphics, mapId, mapItemSavedData, i + 71, j + 17, 0.45F);
+      }
+
+   }
+
+   private void renderMap(GuiGraphics guiGraphics, @Nullable MapId mapId, @Nullable MapItemSavedData mapItemSavedData, int i, int j, float f) {
+      if (mapId != null && mapItemSavedData != null) {
+         guiGraphics.pose().pushPose();
+         guiGraphics.pose().translate((float)i, (float)j, 1.0F);
+         guiGraphics.pose().scale(f, f, 1.0F);
+         this.minecraft.gameRenderer.getMapRenderer().render(guiGraphics.pose(), guiGraphics.bufferSource(), mapId, mapItemSavedData, true, 15728880);
+         guiGraphics.flush();
+         guiGraphics.pose().popPose();
+      }
+
+   }
+}

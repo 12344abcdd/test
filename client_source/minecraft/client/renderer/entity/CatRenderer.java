@@ -1,0 +1,55 @@
+package net.minecraft.client.renderer.entity;
+
+import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.math.Axis;
+import java.util.Iterator;
+import java.util.List;
+import net.fabricmc.api.EnvType;
+import net.fabricmc.api.Environment;
+import net.minecraft.client.model.CatModel;
+import net.minecraft.client.model.geom.ModelLayers;
+import net.minecraft.client.renderer.entity.layers.CatCollarLayer;
+import net.minecraft.core.BlockPos;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.util.Mth;
+import net.minecraft.world.entity.animal.Cat;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.phys.AABB;
+
+@Environment(EnvType.CLIENT)
+public class CatRenderer extends MobRenderer<Cat, CatModel<Cat>> {
+   public CatRenderer(EntityRendererProvider.Context context) {
+      super(context, new CatModel(context.bakeLayer(ModelLayers.CAT)), 0.4F);
+      this.addLayer(new CatCollarLayer(this, context.getModelSet()));
+   }
+
+   public ResourceLocation getTextureLocation(Cat cat) {
+      return cat.getTextureId();
+   }
+
+   protected void scale(Cat cat, PoseStack poseStack, float f) {
+      super.scale(cat, poseStack, f);
+      poseStack.scale(0.8F, 0.8F, 0.8F);
+   }
+
+   protected void setupRotations(Cat cat, PoseStack poseStack, float f, float g, float h, float i) {
+      super.setupRotations(cat, poseStack, f, g, h, i);
+      float j = cat.getLieDownAmount(h);
+      if (j > 0.0F) {
+         poseStack.translate(0.4F * j, 0.15F * j, 0.1F * j);
+         poseStack.mulPose(Axis.ZP.rotationDegrees(Mth.rotLerp(j, 0.0F, 90.0F)));
+         BlockPos blockPos = cat.blockPosition();
+         List<Player> list = cat.level().getEntitiesOfClass(Player.class, (new AABB(blockPos)).inflate(2.0D, 2.0D, 2.0D));
+         Iterator var10 = list.iterator();
+
+         while(var10.hasNext()) {
+            Player player = (Player)var10.next();
+            if (player.isSleeping()) {
+               poseStack.translate(0.15F * j, 0.0F, 0.0F);
+               break;
+            }
+         }
+      }
+
+   }
+}

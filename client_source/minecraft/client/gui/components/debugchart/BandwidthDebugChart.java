@@ -1,0 +1,68 @@
+package net.minecraft.client.gui.components.debugchart;
+
+import java.util.Locale;
+import net.fabricmc.api.EnvType;
+import net.fabricmc.api.Environment;
+import net.minecraft.client.gui.Font;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.renderer.RenderType;
+import net.minecraft.util.Mth;
+import net.minecraft.util.debugchart.SampleStorage;
+
+@Environment(EnvType.CLIENT)
+public class BandwidthDebugChart extends AbstractDebugChart {
+   private static final int MIN_COLOR = -16711681;
+   private static final int MID_COLOR = -6250241;
+   private static final int MAX_COLOR = -65536;
+   private static final int KILOBYTE = 1024;
+   private static final int MEGABYTE = 1048576;
+   private static final int CHART_TOP_VALUE = 1048576;
+
+   public BandwidthDebugChart(Font font, SampleStorage sampleStorage) {
+      super(font, sampleStorage);
+   }
+
+   protected void renderAdditionalLinesAndLabels(GuiGraphics guiGraphics, int i, int j, int k) {
+      this.drawLabeledLineAtValue(guiGraphics, i, j, k, 64);
+      this.drawLabeledLineAtValue(guiGraphics, i, j, k, 1024);
+      this.drawLabeledLineAtValue(guiGraphics, i, j, k, 16384);
+      this.drawStringWithShade(guiGraphics, toDisplayStringInternal(1048576.0D), i + 1, k - getSampleHeightInternal(1048576.0D) + 1);
+   }
+
+   private void drawLabeledLineAtValue(GuiGraphics guiGraphics, int i, int j, int k, int l) {
+      this.drawLineWithLabel(guiGraphics, i, j, k - getSampleHeightInternal((double)l), toDisplayStringInternal((double)l));
+   }
+
+   private void drawLineWithLabel(GuiGraphics guiGraphics, int i, int j, int k, String string) {
+      this.drawStringWithShade(guiGraphics, string, i + 1, k + 1);
+      guiGraphics.hLine(RenderType.guiOverlay(), i, i + j - 1, k, -1);
+   }
+
+   protected String toDisplayString(double d) {
+      return toDisplayStringInternal(toBytesPerSecond(d));
+   }
+
+   private static String toDisplayStringInternal(double d) {
+      if (d >= 1048576.0D) {
+         return String.format(Locale.ROOT, "%.1f MiB/s", d / 1048576.0D);
+      } else {
+         return d >= 1024.0D ? String.format(Locale.ROOT, "%.1f KiB/s", d / 1024.0D) : String.format(Locale.ROOT, "%d B/s", Mth.floor(d));
+      }
+   }
+
+   protected int getSampleHeight(double d) {
+      return getSampleHeightInternal(toBytesPerSecond(d));
+   }
+
+   private static int getSampleHeightInternal(double d) {
+      return (int)Math.round(Math.log(d + 1.0D) * 60.0D / Math.log(1048576.0D));
+   }
+
+   protected int getSampleColor(long l) {
+      return this.getSampleColor(toBytesPerSecond((double)l), 0.0D, -16711681, 8192.0D, -6250241, 1.048576E7D, -65536);
+   }
+
+   private static double toBytesPerSecond(double d) {
+      return d * 20.0D;
+   }
+}

@@ -1,0 +1,30 @@
+package net.minecraft.client.renderer.entity;
+
+import com.google.common.collect.Maps;
+import java.util.Map;
+import net.fabricmc.api.EnvType;
+import net.fabricmc.api.Environment;
+import net.minecraft.Util;
+import net.minecraft.client.model.CowModel;
+import net.minecraft.client.model.geom.ModelLayers;
+import net.minecraft.client.renderer.entity.layers.MushroomCowMushroomLayer;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.entity.animal.MushroomCow;
+import net.minecraft.world.entity.animal.MushroomCow.MushroomType;
+
+@Environment(EnvType.CLIENT)
+public class MushroomCowRenderer extends MobRenderer<MushroomCow, CowModel<MushroomCow>> {
+   private static final Map<MushroomType, ResourceLocation> TEXTURES = (Map)Util.make(Maps.newHashMap(), (hashMap) -> {
+      hashMap.put(MushroomType.BROWN, ResourceLocation.withDefaultNamespace("textures/entity/cow/brown_mooshroom.png"));
+      hashMap.put(MushroomType.RED, ResourceLocation.withDefaultNamespace("textures/entity/cow/red_mooshroom.png"));
+   });
+
+   public MushroomCowRenderer(EntityRendererProvider.Context context) {
+      super(context, new CowModel(context.bakeLayer(ModelLayers.MOOSHROOM)), 0.7F);
+      this.addLayer(new MushroomCowMushroomLayer(this, context.getBlockRenderDispatcher()));
+   }
+
+   public ResourceLocation getTextureLocation(MushroomCow mushroomCow) {
+      return (ResourceLocation)TEXTURES.get(mushroomCow.getVariant());
+   }
+}

@@ -1,0 +1,20 @@
+package net.minecraft.client.particle;
+
+import net.fabricmc.api.EnvType;
+import net.fabricmc.api.Environment;
+import net.minecraft.client.multiplayer.ClientLevel;
+
+@Environment(EnvType.CLIENT)
+public abstract class RisingParticle extends TextureSheetParticle {
+   protected RisingParticle(ClientLevel clientLevel, double d, double e, double f, double g, double h, double i) {
+      super(clientLevel, d, e, f, g, h, i);
+      this.friction = 0.96F;
+      this.xd = this.xd * 0.009999999776482582D + g;
+      this.yd = this.yd * 0.009999999776482582D + h;
+      this.zd = this.zd * 0.009999999776482582D + i;
+      this.x += (double)((this.random.nextFloat() - this.random.nextFloat()) * 0.05F);
+      this.y += (double)((this.random.nextFloat() - this.random.nextFloat()) * 0.05F);
+      this.z += (double)((this.random.nextFloat() - this.random.nextFloat()) * 0.05F);
+      this.lifetime = (int)(8.0D / (Math.random() * 0.8D + 0.2D)) + 4;
+   }
+}

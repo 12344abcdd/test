@@ -1,0 +1,50 @@
+package net.minecraft.client.renderer.debug;
+
+import com.mojang.blaze3d.vertex.PoseStack;
+import java.util.Iterator;
+import net.fabricmc.api.EnvType;
+import net.fabricmc.api.Environment;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.core.BlockPos;
+import net.minecraft.tags.FluidTags;
+import net.minecraft.world.level.LevelReader;
+import net.minecraft.world.level.material.FluidState;
+import net.minecraft.world.phys.AABB;
+
+@Environment(EnvType.CLIENT)
+public class WaterDebugRenderer implements DebugRenderer.SimpleDebugRenderer {
+   private final Minecraft minecraft;
+
+   public WaterDebugRenderer(Minecraft minecraft) {
+      this.minecraft = minecraft;
+   }
+
+   public void render(PoseStack poseStack, MultiBufferSource multiBufferSource, double d, double e, double f) {
+      BlockPos blockPos = this.minecraft.player.blockPosition();
+      LevelReader levelReader = this.minecraft.player.level();
+      Iterator var11 = BlockPos.betweenClosed(blockPos.offset(-10, -10, -10), blockPos.offset(10, 10, 10)).iterator();
+
+      BlockPos blockPos2;
+      FluidState fluidState;
+      while(var11.hasNext()) {
+         blockPos2 = (BlockPos)var11.next();
+         fluidState = levelReader.getFluidState(blockPos2);
+         if (fluidState.is(FluidTags.WATER)) {
+            double g = (double)((float)blockPos2.getY() + fluidState.getHeight(levelReader, blockPos2));
+            DebugRenderer.renderFilledBox(poseStack, multiBufferSource, (new AABB((double)((float)blockPos2.getX() + 0.01F), (double)((float)blockPos2.getY() + 0.01F), (double)((float)blockPos2.getZ() + 0.01F), (double)((float)blockPos2.getX() + 0.99F), g, (double)((float)blockPos2.getZ() + 0.99F))).move(-d, -e, -f), 0.0F, 1.0F, 0.0F, 0.15F);
+         }
+      }
+
+      var11 = BlockPos.betweenClosed(blockPos.offset(-10, -10, -10), blockPos.offset(10, 10, 10)).iterator();
+
+      while(var11.hasNext()) {
+         blockPos2 = (BlockPos)var11.next();
+         fluidState = levelReader.getFluidState(blockPos2);
+         if (fluidState.is(FluidTags.WATER)) {
+            DebugRenderer.renderFloatingText(poseStack, multiBufferSource, String.valueOf(fluidState.getAmount()), (double)blockPos2.getX() + 0.5D, (double)((float)blockPos2.getY() + fluidState.getHeight(levelReader, blockPos2)), (double)blockPos2.getZ() + 0.5D, -16777216);
+         }
+      }
+
+   }
+}

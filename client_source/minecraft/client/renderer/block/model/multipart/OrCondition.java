@@ -1,0 +1,32 @@
+package net.minecraft.client.renderer.block.model.multipart;
+
+import com.google.common.collect.Streams;
+import java.util.List;
+import java.util.function.Predicate;
+import java.util.stream.Collectors;
+import net.fabricmc.api.EnvType;
+import net.fabricmc.api.Environment;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.StateDefinition;
+
+@Environment(EnvType.CLIENT)
+public class OrCondition implements Condition {
+   public static final String TOKEN = "OR";
+   private final Iterable<? extends Condition> conditions;
+
+   public OrCondition(Iterable<? extends Condition> iterable) {
+      this.conditions = iterable;
+   }
+
+   public Predicate<BlockState> getPredicate(StateDefinition<Block, BlockState> stateDefinition) {
+      List<Predicate<BlockState>> list = (List)Streams.stream(this.conditions).map((condition) -> {
+         return condition.getPredicate(stateDefinition);
+      }).collect(Collectors.toList());
+      return (blockState) -> {
+         return list.stream().anyMatch((predicate) -> {
+            return predicate.test(blockState);
+         });
+      };
+   }
+}

@@ -1,0 +1,399 @@
+package net.minecraft.client.renderer;
+
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonSyntaxException;
+import com.mojang.blaze3d.pipeline.RenderTarget;
+import com.mojang.blaze3d.pipeline.TextureTarget;
+import com.mojang.blaze3d.shaders.Uniform;
+import com.mojang.blaze3d.systems.RenderSystem;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import net.fabricmc.api.EnvType;
+import net.fabricmc.api.Environment;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.texture.AbstractTexture;
+import net.minecraft.client.renderer.texture.TextureManager;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.ChainedJsonException;
+import net.minecraft.server.packs.resources.Resource;
+import net.minecraft.server.packs.resources.ResourceProvider;
+import net.minecraft.util.GsonHelper;
+import org.jetbrains.annotations.Nullable;
+import org.joml.Matrix4f;
+
+@Environment(EnvType.CLIENT)
+public class PostChain implements AutoCloseable {
+   private static final String MAIN_RENDER_TARGET = "minecraft:main";
+   private final RenderTarget screenTarget;
+   private final ResourceProvider resourceProvider;
+   private final String name;
+   private final List<PostPass> passes = Lists.newArrayList();
+   private final Map<String, RenderTarget> customRenderTargets = Maps.newHashMap();
+   private final List<RenderTarget> fullSizedTargets = Lists.newArrayList();
+   private Matrix4f shaderOrthoMatrix;
+   private int screenWidth;
+   private int screenHeight;
+   private float time;
+   private float lastStamp;
+
+   public PostChain(TextureManager textureManager, ResourceProvider resourceProvider, RenderTarget renderTarget, ResourceLocation resourceLocation) throws IOException, JsonSyntaxException {
+      this.resourceProvider = resourceProvider;
+      this.screenTarget = renderTarget;
+      this.time = 0.0F;
+      this.lastStamp = 0.0F;
+      this.screenWidth = renderTarget.viewWidth;
+      this.screenHeight = renderTarget.viewHeight;
+      this.name = resourceLocation.toString();
+      this.updateOrthoMatrix();
+      this.load(textureManager, resourceLocation);
+   }
+
+   private void load(TextureManager textureManager, ResourceLocation resourceLocation) throws IOException, JsonSyntaxException {
+      Resource resource = this.resourceProvider.getResourceOrThrow(resourceLocation);
+
+      try {
+         BufferedReader reader = resource.openAsReader();
+
+         try {
+            JsonObject jsonObject = GsonHelper.parse(reader);
+            JsonArray jsonArray;
+            int i;
+            Iterator var8;
+            JsonElement jsonElement;
+            ChainedJsonException chainedJsonException;
+            if (GsonHelper.isArrayNode(jsonObject, "targets")) {
+               jsonArray = jsonObject.getAsJsonArray("targets");
+               i = 0;
+
+               for(var8 = jsonArray.iterator(); var8.hasNext(); ++i) {
+                  jsonElement = (JsonElement)var8.next();
+
+                  try {
+                     this.parseTargetNode(jsonElement);
+                  } catch (Exception var14) {
+                     chainedJsonException = ChainedJsonException.forException(var14);
+                     chainedJsonException.prependJsonKey("targets[" + i + "]");
+                     throw chainedJsonException;
+                  }
+               }
+            }
+
+            if (GsonHelper.isArrayNode(jsonObject, "passes")) {
+               jsonArray = jsonObject.getAsJsonArray("passes");
+               i = 0;
+
+               for(var8 = jsonArray.iterator(); var8.hasNext(); ++i) {
+                  jsonElement = (JsonElement)var8.next();
+
+                  try {
+                     this.parsePassNode(textureManager, jsonElement);
+                  } catch (Exception var13) {
+                     chainedJsonException = ChainedJsonException.forException(var13);
+                     chainedJsonException.prependJsonKey("passes[" + i + "]");
+                     throw chainedJsonException;
+                  }
+               }
+            }
+         } catch (Throwable var15) {
+            if (reader != null) {
+               try {
+                  reader.close();
+               } catch (Throwable var12) {
+                  var15.addSuppressed(var12);
+               }
+            }
+
+            throw var15;
+         }
+
+         if (reader != null) {
+            reader.close();
+         }
+
+      } catch (Exception var16) {
+         ChainedJsonException chainedJsonException2 = ChainedJsonException.forException(var16);
+         String var10001 = resourceLocation.getPath();
+         chainedJsonException2.setFilenameAndFlush(var10001 + " (" + resource.sourcePackId() + ")");
+         throw chainedJsonException2;
+      }
+   }
+
+   private void parseTargetNode(JsonElement jsonElement) throws ChainedJsonException {
+      if (GsonHelper.isStringValue(jsonElement)) {
+         this.addTempTarget(jsonElement.getAsString(), this.screenWidth, this.screenHeight);
+      } else {
+         JsonObject jsonObject = GsonHelper.convertToJsonObject(jsonElement, "target");
+         String string = GsonHelper.getAsString(jsonObject, "name");
+         int i = GsonHelper.getAsInt(jsonObject, "width", this.screenWidth);
+         int j = GsonHelper.getAsInt(jsonObject, "height", this.screenHeight);
+         if (this.customRenderTargets.containsKey(string)) {
+            throw new ChainedJsonException(string + " is already defined");
+         }
+
+         this.addTempTarget(string, i, j);
+      }
+
+   }
+
+   private void parsePassNode(TextureManager textureManager, JsonElement jsonElement) throws IOException {
+      JsonObject jsonObject = GsonHelper.convertToJsonObject(jsonElement, "pass");
+      String string = GsonHelper.getAsString(jsonObject, "name");
+      String string2 = GsonHelper.getAsString(jsonObject, "intarget");
+      String string3 = GsonHelper.getAsString(jsonObject, "outtarget");
+      RenderTarget renderTarget = this.getRenderTarget(string2);
+      RenderTarget renderTarget2 = this.getRenderTarget(string3);
+      boolean bl = GsonHelper.getAsBoolean(jsonObject, "use_linear_filter", false);
+      if (renderTarget == null) {
+         throw new ChainedJsonException("Input target '" + string2 + "' does not exist");
+      } else if (renderTarget2 == null) {
+         throw new ChainedJsonException("Output target '" + string3 + "' does not exist");
+      } else {
+         PostPass postPass = this.addPass(string, renderTarget, renderTarget2, bl);
+         JsonArray jsonArray = GsonHelper.getAsJsonArray(jsonObject, "auxtargets", (JsonArray)null);
+         if (jsonArray != null) {
+            int i = 0;
+
+            for(Iterator var13 = jsonArray.iterator(); var13.hasNext(); ++i) {
+               JsonElement jsonElement2 = (JsonElement)var13.next();
+
+               try {
+                  JsonObject jsonObject2 = GsonHelper.convertToJsonObject(jsonElement2, "auxtarget");
+                  String string4 = GsonHelper.getAsString(jsonObject2, "name");
+                  String string5 = GsonHelper.getAsString(jsonObject2, "id");
+                  boolean bl2;
+                  String string6;
+                  if (string5.endsWith(":depth")) {
+                     bl2 = true;
+                     string6 = string5.substring(0, string5.lastIndexOf(58));
+                  } else {
+                     bl2 = false;
+                     string6 = string5;
+                  }
+
+                  RenderTarget renderTarget3 = this.getRenderTarget(string6);
+                  if (renderTarget3 == null) {
+                     if (bl2) {
+                        throw new ChainedJsonException("Render target '" + string6 + "' can't be used as depth buffer");
+                     }
+
+                     ResourceLocation resourceLocation = ResourceLocation.withDefaultNamespace("textures/effect/" + string6 + ".png");
+                     this.resourceProvider.getResource(resourceLocation).orElseThrow(() -> {
+                        return new ChainedJsonException("Render target or texture '" + string6 + "' does not exist");
+                     });
+                     RenderSystem.setShaderTexture(0, resourceLocation);
+                     textureManager.bindForSetup(resourceLocation);
+                     AbstractTexture abstractTexture = textureManager.getTexture(resourceLocation);
+                     int j = GsonHelper.getAsInt(jsonObject2, "width");
+                     int k = GsonHelper.getAsInt(jsonObject2, "height");
+                     boolean bl3 = GsonHelper.getAsBoolean(jsonObject2, "bilinear");
+                     if (bl3) {
+                        RenderSystem.texParameter(3553, 10241, 9729);
+                        RenderSystem.texParameter(3553, 10240, 9729);
+                     } else {
+                        RenderSystem.texParameter(3553, 10241, 9728);
+                        RenderSystem.texParameter(3553, 10240, 9728);
+                     }
+
+                     Objects.requireNonNull(abstractTexture);
+                     postPass.addAuxAsset(string4, abstractTexture::getId, j, k);
+                  } else if (bl2) {
+                     Objects.requireNonNull(renderTarget3);
+                     postPass.addAuxAsset(string4, renderTarget3::getDepthTextureId, renderTarget3.width, renderTarget3.height);
+                  } else {
+                     Objects.requireNonNull(renderTarget3);
+                     postPass.addAuxAsset(string4, renderTarget3::getColorTextureId, renderTarget3.width, renderTarget3.height);
+                  }
+               } catch (Exception var27) {
+                  ChainedJsonException chainedJsonException = ChainedJsonException.forException(var27);
+                  chainedJsonException.prependJsonKey("auxtargets[" + i + "]");
+                  throw chainedJsonException;
+               }
+            }
+         }
+
+         JsonArray jsonArray2 = GsonHelper.getAsJsonArray(jsonObject, "uniforms", (JsonArray)null);
+         if (jsonArray2 != null) {
+            int l = 0;
+
+            for(Iterator var30 = jsonArray2.iterator(); var30.hasNext(); ++l) {
+               JsonElement jsonElement3 = (JsonElement)var30.next();
+
+               try {
+                  this.parseUniformNode(jsonElement3);
+               } catch (Exception var26) {
+                  ChainedJsonException chainedJsonException2 = ChainedJsonException.forException(var26);
+                  chainedJsonException2.prependJsonKey("uniforms[" + l + "]");
+                  throw chainedJsonException2;
+               }
+            }
+         }
+
+      }
+   }
+
+   private void parseUniformNode(JsonElement jsonElement) throws ChainedJsonException {
+      JsonObject jsonObject = GsonHelper.convertToJsonObject(jsonElement, "uniform");
+      String string = GsonHelper.getAsString(jsonObject, "name");
+      Uniform uniform = ((PostPass)this.passes.get(this.passes.size() - 1)).getEffect().getUniform(string);
+      if (uniform == null) {
+         throw new ChainedJsonException("Uniform '" + string + "' does not exist");
+      } else {
+         float[] fs = new float[4];
+         int i = 0;
+         JsonArray jsonArray = GsonHelper.getAsJsonArray(jsonObject, "values");
+
+         for(Iterator var8 = jsonArray.iterator(); var8.hasNext(); ++i) {
+            JsonElement jsonElement2 = (JsonElement)var8.next();
+
+            try {
+               fs[i] = GsonHelper.convertToFloat(jsonElement2, "value");
+            } catch (Exception var12) {
+               ChainedJsonException chainedJsonException = ChainedJsonException.forException(var12);
+               chainedJsonException.prependJsonKey("values[" + i + "]");
+               throw chainedJsonException;
+            }
+         }
+
+         switch(i) {
+         case 0:
+         default:
+            break;
+         case 1:
+            uniform.set(fs[0]);
+            break;
+         case 2:
+            uniform.set(fs[0], fs[1]);
+            break;
+         case 3:
+            uniform.set(fs[0], fs[1], fs[2]);
+            break;
+         case 4:
+            uniform.set(fs[0], fs[1], fs[2], fs[3]);
+         }
+
+      }
+   }
+
+   public RenderTarget getTempTarget(String string) {
+      return (RenderTarget)this.customRenderTargets.get(string);
+   }
+
+   public void addTempTarget(String string, int i, int j) {
+      RenderTarget renderTarget = new TextureTarget(i, j, true, Minecraft.ON_OSX);
+      renderTarget.setClearColor(0.0F, 0.0F, 0.0F, 0.0F);
+      this.customRenderTargets.put(string, renderTarget);
+      if (i == this.screenWidth && j == this.screenHeight) {
+         this.fullSizedTargets.add(renderTarget);
+      }
+
+   }
+
+   public void close() {
+      Iterator var1 = this.customRenderTargets.values().iterator();
+
+      while(var1.hasNext()) {
+         RenderTarget renderTarget = (RenderTarget)var1.next();
+         renderTarget.destroyBuffers();
+      }
+
+      var1 = this.passes.iterator();
+
+      while(var1.hasNext()) {
+         PostPass postPass = (PostPass)var1.next();
+         postPass.close();
+      }
+
+      this.passes.clear();
+   }
+
+   public PostPass addPass(String string, RenderTarget renderTarget, RenderTarget renderTarget2, boolean bl) throws IOException {
+      PostPass postPass = new PostPass(this.resourceProvider, string, renderTarget, renderTarget2, bl);
+      this.passes.add(this.passes.size(), postPass);
+      return postPass;
+   }
+
+   private void updateOrthoMatrix() {
+      this.shaderOrthoMatrix = (new Matrix4f()).setOrtho(0.0F, (float)this.screenTarget.width, 0.0F, (float)this.screenTarget.height, 0.1F, 1000.0F);
+   }
+
+   public void resize(int i, int j) {
+      this.screenWidth = this.screenTarget.width;
+      this.screenHeight = this.screenTarget.height;
+      this.updateOrthoMatrix();
+      Iterator var3 = this.passes.iterator();
+
+      while(var3.hasNext()) {
+         PostPass postPass = (PostPass)var3.next();
+         postPass.setOrthoMatrix(this.shaderOrthoMatrix);
+      }
+
+      var3 = this.fullSizedTargets.iterator();
+
+      while(var3.hasNext()) {
+         RenderTarget renderTarget = (RenderTarget)var3.next();
+         renderTarget.resize(i, j, Minecraft.ON_OSX);
+      }
+
+   }
+
+   private void setFilterMode(int i) {
+      this.screenTarget.setFilterMode(i);
+      Iterator var2 = this.customRenderTargets.values().iterator();
+
+      while(var2.hasNext()) {
+         RenderTarget renderTarget = (RenderTarget)var2.next();
+         renderTarget.setFilterMode(i);
+      }
+
+   }
+
+   public void process(float f) {
+      for(this.time += f; this.time > 20.0F; this.time -= 20.0F) {
+      }
+
+      int i = 9728;
+
+      PostPass postPass;
+      for(Iterator var3 = this.passes.iterator(); var3.hasNext(); postPass.process(this.time / 20.0F)) {
+         postPass = (PostPass)var3.next();
+         int j = postPass.getFilterMode();
+         if (i != j) {
+            this.setFilterMode(j);
+            i = j;
+         }
+      }
+
+      this.setFilterMode(9728);
+   }
+
+   public void setUniform(String string, float f) {
+      Iterator var3 = this.passes.iterator();
+
+      while(var3.hasNext()) {
+         PostPass postPass = (PostPass)var3.next();
+         postPass.getEffect().safeGetUniform(string).set(f);
+      }
+
+   }
+
+   public final String getName() {
+      return this.name;
+   }
+
+   @Nullable
+   private RenderTarget getRenderTarget(@Nullable String string) {
+      if (string == null) {
+         return null;
+      } else {
+         return string.equals("minecraft:main") ? this.screenTarget : (RenderTarget)this.customRenderTargets.get(string);
+      }
+   }
+}

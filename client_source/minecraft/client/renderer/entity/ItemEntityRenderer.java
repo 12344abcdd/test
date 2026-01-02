@@ -1,0 +1,118 @@
+package net.minecraft.client.renderer.entity;
+
+import com.google.common.annotations.VisibleForTesting;
+import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.math.Axis;
+import net.fabricmc.api.EnvType;
+import net.fabricmc.api.Environment;
+import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.texture.OverlayTexture;
+import net.minecraft.client.renderer.texture.TextureAtlas;
+import net.minecraft.client.resources.model.BakedModel;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.util.Mth;
+import net.minecraft.util.RandomSource;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemDisplayContext;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.Level;
+
+@Environment(EnvType.CLIENT)
+public class ItemEntityRenderer extends EntityRenderer<ItemEntity> {
+   private static final float ITEM_BUNDLE_OFFSET_SCALE = 0.15F;
+   private static final float FLAT_ITEM_BUNDLE_OFFSET_X = 0.0F;
+   private static final float FLAT_ITEM_BUNDLE_OFFSET_Y = 0.0F;
+   private static final float FLAT_ITEM_BUNDLE_OFFSET_Z = 0.09375F;
+   private final ItemRenderer itemRenderer;
+   private final RandomSource random = RandomSource.create();
+
+   public ItemEntityRenderer(EntityRendererProvider.Context context) {
+      super(context);
+      this.itemRenderer = context.getItemRenderer();
+      this.shadowRadius = 0.15F;
+      this.shadowStrength = 0.75F;
+   }
+
+   public ResourceLocation getTextureLocation(ItemEntity itemEntity) {
+      return TextureAtlas.LOCATION_BLOCKS;
+   }
+
+   public void render(ItemEntity itemEntity, float f, float g, PoseStack poseStack, MultiBufferSource multiBufferSource, int i) {
+      poseStack.pushPose();
+      ItemStack itemStack = itemEntity.getItem();
+      this.random.setSeed((long)getSeedForItemStack(itemStack));
+      BakedModel bakedModel = this.itemRenderer.getModel(itemStack, itemEntity.level(), (LivingEntity)null, itemEntity.getId());
+      boolean bl = bakedModel.isGui3d();
+      float h = 0.25F;
+      float j = Mth.sin(((float)itemEntity.getAge() + g) / 10.0F + itemEntity.bobOffs) * 0.1F + 0.1F;
+      float k = bakedModel.getTransforms().getTransform(ItemDisplayContext.GROUND).scale.y();
+      poseStack.translate(0.0F, j + 0.25F * k, 0.0F);
+      float l = itemEntity.getSpin(g);
+      poseStack.mulPose(Axis.YP.rotation(l));
+      renderMultipleFromCount(this.itemRenderer, poseStack, multiBufferSource, i, itemStack, bakedModel, bl, this.random);
+      poseStack.popPose();
+      super.render(itemEntity, f, g, poseStack, multiBufferSource, i);
+   }
+
+   public static int getSeedForItemStack(ItemStack itemStack) {
+      return itemStack.isEmpty() ? 187 : Item.getId(itemStack.getItem()) + itemStack.getDamageValue();
+   }
+
+   @VisibleForTesting
+   static int getRenderedAmount(int i) {
+      if (i <= 1) {
+         return 1;
+      } else if (i <= 16) {
+         return 2;
+      } else if (i <= 32) {
+         return 3;
+      } else {
+         return i <= 48 ? 4 : 5;
+      }
+   }
+
+   public static void renderMultipleFromCount(ItemRenderer itemRenderer, PoseStack poseStack, MultiBufferSource multiBufferSource, int i, ItemStack itemStack, RandomSource randomSource, Level level) {
+      BakedModel bakedModel = itemRenderer.getModel(itemStack, level, (LivingEntity)null, 0);
+      renderMultipleFromCount(itemRenderer, poseStack, multiBufferSource, i, itemStack, bakedModel, bakedModel.isGui3d(), randomSource);
+   }
+
+   public static void renderMultipleFromCount(ItemRenderer itemRenderer, PoseStack poseStack, MultiBufferSource multiBufferSource, int i, ItemStack itemStack, BakedModel bakedModel, boolean bl, RandomSource randomSource) {
+      int j = getRenderedAmount(itemStack.getCount());
+      float f = bakedModel.getTransforms().ground.scale.x();
+      float g = bakedModel.getTransforms().ground.scale.y();
+      float h = bakedModel.getTransforms().ground.scale.z();
+      float l;
+      float m;
+      if (!bl) {
+         float k = -0.0F * (float)(j - 1) * 0.5F * f;
+         l = -0.0F * (float)(j - 1) * 0.5F * g;
+         m = -0.09375F * (float)(j - 1) * 0.5F * h;
+         poseStack.translate(k, l, m);
+      }
+
+      for(int n = 0; n < j; ++n) {
+         poseStack.pushPose();
+         if (n > 0) {
+            if (bl) {
+               l = (randomSource.nextFloat() * 2.0F - 1.0F) * 0.15F;
+               m = (randomSource.nextFloat() * 2.0F - 1.0F) * 0.15F;
+               float o = (randomSource.nextFloat() * 2.0F - 1.0F) * 0.15F;
+               poseStack.translate(l, m, o);
+            } else {
+               l = (randomSource.nextFloat() * 2.0F - 1.0F) * 0.15F * 0.5F;
+               m = (randomSource.nextFloat() * 2.0F - 1.0F) * 0.15F * 0.5F;
+               poseStack.translate(l, m, 0.0F);
+            }
+         }
+
+         itemRenderer.render(itemStack, ItemDisplayContext.GROUND, false, poseStack, multiBufferSource, i, OverlayTexture.NO_OVERLAY, bakedModel);
+         poseStack.popPose();
+         if (!bl) {
+            poseStack.translate(0.0F * f, 0.0F * g, 0.09375F * h);
+         }
+      }
+
+   }
+}

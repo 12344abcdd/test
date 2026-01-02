@@ -1,0 +1,88 @@
+package net.minecraft.client.renderer.debug;
+
+import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.blaze3d.vertex.VertexConsumer;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Optional;
+import net.fabricmc.api.EnvType;
+import net.fabricmc.api.Environment;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.RenderType;
+import net.minecraft.network.protocol.common.custom.BreezeDebugPayload.BreezeInfo;
+import net.minecraft.util.FastColor.ARGB32;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
+import org.joml.Matrix4f;
+
+@Environment(EnvType.CLIENT)
+public class BreezeDebugRenderer {
+   private static final int JUMP_TARGET_LINE_COLOR = ARGB32.color(255, 255, 100, 255);
+   private static final int TARGET_LINE_COLOR = ARGB32.color(255, 100, 255, 255);
+   private static final int INNER_CIRCLE_COLOR = ARGB32.color(255, 0, 255, 0);
+   private static final int MIDDLE_CIRCLE_COLOR = ARGB32.color(255, 255, 165, 0);
+   private static final int OUTER_CIRCLE_COLOR = ARGB32.color(255, 255, 0, 0);
+   private static final int CIRCLE_VERTICES = 20;
+   private static final float SEGMENT_SIZE_RADIANS = 0.31415927F;
+   private final Minecraft minecraft;
+   private final Map<Integer, BreezeInfo> perEntity = new HashMap();
+
+   public BreezeDebugRenderer(Minecraft minecraft) {
+      this.minecraft = minecraft;
+   }
+
+   public void render(PoseStack poseStack, MultiBufferSource multiBufferSource, double d, double e, double f) {
+      LocalPlayer localPlayer = this.minecraft.player;
+      localPlayer.level().getEntities(EntityType.BREEZE, localPlayer.getBoundingBox().inflate(100.0D), (breeze) -> {
+         return true;
+      }).forEach((breeze) -> {
+         Optional<BreezeInfo> optional = Optional.ofNullable((BreezeInfo)this.perEntity.get(breeze.getId()));
+         optional.map(BreezeInfo::attackTarget).map((integer) -> {
+            return localPlayer.level().getEntity(integer);
+         }).map((entity) -> {
+            return entity.getPosition(this.minecraft.getTimer().getGameTimeDeltaPartialTick(true));
+         }).ifPresent((vec3) -> {
+            drawLine(poseStack, multiBufferSource, d, e, f, breeze.position(), vec3, TARGET_LINE_COLOR);
+            Vec3 vec32 = vec3.add(0.0D, 0.009999999776482582D, 0.0D);
+            drawCircle(poseStack.last().pose(), d, e, f, multiBufferSource.getBuffer(RenderType.debugLineStrip(2.0D)), vec32, 4.0F, INNER_CIRCLE_COLOR);
+            drawCircle(poseStack.last().pose(), d, e, f, multiBufferSource.getBuffer(RenderType.debugLineStrip(2.0D)), vec32, 8.0F, MIDDLE_CIRCLE_COLOR);
+            drawCircle(poseStack.last().pose(), d, e, f, multiBufferSource.getBuffer(RenderType.debugLineStrip(2.0D)), vec32, 20.0F, OUTER_CIRCLE_COLOR);
+         });
+         optional.map(BreezeInfo::jumpTarget).ifPresent((blockPos) -> {
+            drawLine(poseStack, multiBufferSource, d, e, f, breeze.position(), blockPos.getCenter(), JUMP_TARGET_LINE_COLOR);
+            DebugRenderer.renderFilledBox(poseStack, multiBufferSource, AABB.unitCubeFromLowerCorner(Vec3.atLowerCornerOf(blockPos)).move(-d, -e, -f), 1.0F, 0.0F, 0.0F, 1.0F);
+         });
+      });
+   }
+
+   private static void drawLine(PoseStack poseStack, MultiBufferSource multiBufferSource, double d, double e, double f, Vec3 vec3, Vec3 vec32, int i) {
+      VertexConsumer vertexConsumer = multiBufferSource.getBuffer(RenderType.debugLineStrip(2.0D));
+      vertexConsumer.addVertex(poseStack.last(), (float)(vec3.x - d), (float)(vec3.y - e), (float)(vec3.z - f)).setColor(i);
+      vertexConsumer.addVertex(poseStack.last(), (float)(vec32.x - d), (float)(vec32.y - e), (float)(vec32.z - f)).setColor(i);
+   }
+
+   private static void drawCircle(Matrix4f matrix4f, double d, double e, double f, VertexConsumer vertexConsumer, Vec3 vec3, float g, int i) {
+      for(int j = 0; j < 20; ++j) {
+         drawCircleVertex(j, matrix4f, d, e, f, vertexConsumer, vec3, g, i);
+      }
+
+      drawCircleVertex(0, matrix4f, d, e, f, vertexConsumer, vec3, g, i);
+   }
+
+   private static void drawCircleVertex(int i, Matrix4f matrix4f, double d, double e, double f, VertexConsumer vertexConsumer, Vec3 vec3, float g, int j) {
+      float h = (float)i * 0.31415927F;
+      Vec3 vec32 = vec3.add((double)g * Math.cos((double)h), 0.0D, (double)g * Math.sin((double)h));
+      vertexConsumer.addVertex(matrix4f, (float)(vec32.x - d), (float)(vec32.y - e), (float)(vec32.z - f)).setColor(j);
+   }
+
+   public void clear() {
+      this.perEntity.clear();
+   }
+
+   public void add(BreezeInfo breezeInfo) {
+      this.perEntity.put(breezeInfo.id(), breezeInfo);
+   }
+}
