@@ -1,4 +1,4 @@
-package com.example.mixin;
+package com.example.mixin.client;
 
 import net.minecraft.client.renderer.culling.Frustum;
 import net.minecraft.world.phys.AABB;
