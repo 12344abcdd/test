@@ -58,6 +58,9 @@ public class FrustumMixin {
 
     @Overwrite
     public boolean isVisible(AABB aabb) {
+     for (Vector4f plane : frustumData) {
+        if (plane == null) {
+            return true;
         return this.cubeInFrustum(aabb.minX, aabb.minY, aabb.minZ, aabb.maxX, aabb.maxY, aabb.maxZ);
     }
 
@@ -74,6 +77,7 @@ public class FrustumMixin {
         };
 
         for (Vector4f plane : frustumData) {
+            if (plane == null) return true;
             boolean inside = false;
             for (float x : xs) {
                 for (float y : ys) {
